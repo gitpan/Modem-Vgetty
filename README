@@ -1,4 +1,4 @@
-$Id: README,v 1.3 1998/07/22 12:57:38 kas Exp $
+$Id: README,v 1.4 1998/09/08 12:22:41 kas Exp $
 
 The Modem::Vgetty module is a Perl interface to the vgetty program,
 which can be used for communication with the voice modems. Vgetty
@@ -7,7 +7,8 @@ following URL:
 
 	ftp://alpha.greenie.net/pub/mgetty/
 
-The module itself is available from CPAN (http://www.perl.org/cpan/).
+The module itself is available from CPAN
+(http://www.cpan.org/authors/id/Y/YE/YENYA/).
 The development versions are available in form of the CVS tree at
 the following URL:
 

@@ -1,5 +1,5 @@
 # 
-# $Id: Vgetty.pm,v 1.9 1998/08/24 13:54:56 kas Exp $
+# $Id: Vgetty.pm,v 1.13 1998/09/08 12:22:42 kas Exp $
 #
 # Copyright (c) 1998 Jan "Yenya" Kasprzak <kas@fi.muni.cz>. All rights
 # reserved. This package is free software; you can redistribute it and/or
@@ -16,7 +16,7 @@ use Carp;
 
 use vars qw($testing $log_file $VERSION);
 
-$VERSION='0.02';
+$VERSION='0.03';
 $testing = 0;
 $log_file = '/var/log/voicelog';
 
@@ -140,7 +140,6 @@ sub init {
 }
 
 # Setting the voice device
-$dev = undef;
 sub device {
 	my $self = shift;
 	my $dev = shift;
@@ -305,12 +304,12 @@ sub readnum {
 
 	# Install the handler.
 	$self->add_handler('RECEIVED_DTMF', 'readnum', \&_readnum_event);
-	while($_readnum_in_timeout != 0 && $readnum_number eq ''
+	while($_readnum_in_timeout != 0 && $_readnum_number eq ''
 		&& $times-- > 0) {
 		$self->play_and_wait($message);
 		last if $_readnum_in_timeout == 0;
 		while ($_readnum_in_timeout != 0) {
-			$self->wait($readnum_timeout);
+			$self->wait($_readnum_timeout);
 			$self->expect('READY');
 		}
 	}
@@ -365,7 +364,7 @@ Modem::Vgetty - interface to vgetty(8)
 =head1 DESCRIPTION
 
 C<Modem::Vgetty> is an encapsulation object for writing applications
-for voice modems using the L<vgetty/8> or L<vm/8> package. The answering
+for voice modems using the B<vgetty(8)> or B<vm(8)> package. The answering
 machines and sofisticated voice applications can be written using this
 module.
 
@@ -381,8 +380,8 @@ An example of the voice modem can be the ZyXEL U1496, US Robotics
 Sportster (not Courier), etc.
 
 To use this software with the voice modem you need to have the
-L<vgetty/8> package installed. B<Vgetty> is distributed as a part of
-B<mgetty> package. In fact, B<vgetty> is a L<mgetty/8> with the voice
+B<vgetty(8)> package installed. B<Vgetty> is distributed as a part of
+B<mgetty> package. In fact, B<vgetty> is a B<mgetty(8)> with the voice
 extensions. Vgetty has some support for scripting - when it receives
 an incoming call, it runs a voice shell (it is program specified in
 the B<voice.conf> file) as its child process, establishes the read
@@ -402,7 +401,7 @@ Originally there was a (Bourne) shell interface to B<vgetty> only.
 The B<Modem::Vgetty> module allows user to write the voice shell in Perl.
 The typical use is to write a script and point the B<vgetty> to it
 (in B<voice.conf> file). The script will be run when somebody calls in.
-Another use is running voice shell from the L<vm/8> program, which
+Another use is running voice shell from the B<vm(8)> program, which
 can for example dial somewhere and say something.
 
 =head1 QUICK START
@@ -788,7 +787,7 @@ method and record them using the B<record> method. The ".rmd" extension
 a single format - every modem has its own format (sampling frequency,
 data bit depth, etc). There is a B<pvftools> package for converting
 the sound files (it is a set of filters similar to the B<netpbm> for image
-files). The L<pvftormd/1> filter can be used to create the RMD files
+files). The B<pvftormd(1)> filter can be used to create the RMD files
 for all known types of modems.
 
 =head1 EXAMPLES
@@ -823,7 +822,8 @@ A simple answering machine can look like this:
 		 " | mail -s 'New voice message' $voicemaster";
         exit 0;
 
-See the B<examples/answering_machine.pl> in the source distribution.
+See the B<examples/answering_machine.pl> in the source distribution,
+which contains a more configurable version of the above text.
 It first sets the event handlers for the case of busy tone (the caller
 hangs up) or silence (the caller doesn't speak at all). The handler
 stops B<vgetty> from anything it is currently doing and sets the $finish
@@ -903,12 +903,12 @@ enter a new wait using B<$self->wait>.
 
 		# Install the handler.
 		$self->add_handler('RECEIVED_DTMF', 'readnum', \&_readnum_event);
-		while($_readnum_in_timeout != 0 && $readnum_number eq ''
+		while($_readnum_in_timeout != 0 && $_readnum_number eq ''
 			&& $times-- > 0) {
 			$self->play_and_wait($message);
 			last if $_readnum_in_timeout == 0;
 			while ($_readnum_in_timeout != 0) {
-				$self->wait($readnum_timeout);
+				$self->wait($_readnum_timeout);
 				$self->expect('READY');
 			}
 		}
@@ -923,6 +923,14 @@ The B<readnum> routine just sets up the event handler, then plays
 the B<$message> and waits for the input (possibly several times).
 The main work is done in the event handler. At the end the handler
 is unregistered and the final value is returned.
+
+=head2 Callme script
+
+In the B<examples> subdirectory of the source distribution there is
+a B<callme.pl> script. This dials the given number and plays the
+given message. Use the following command to run it:
+
+	vm shell -S /usr/bin/perl callme.pl <number> <message>.rmd
 
 =head1 BUGS
 
