@@ -1,5 +1,5 @@
 # 
-# $Id: Vgetty.pm,v 1.3 1998/07/20 14:18:09 kas Exp $
+# $Id: Vgetty.pm,v 1.9 1998/08/24 13:54:56 kas Exp $
 #
 # Copyright (c) 1998 Jan "Yenya" Kasprzak <kas@fi.muni.cz>. All rights
 # reserved. This package is free software; you can redistribute it and/or
@@ -16,7 +16,7 @@ use Carp;
 
 use vars qw($testing $log_file $VERSION);
 
-$VERSION='0.01';
+$VERSION='0.02';
 $testing = 0;
 $log_file = '/var/log/voicelog';
 
@@ -264,6 +264,63 @@ sub play_and_wait {
 	$self->play($file);
 	$self->waitfor('READY');
 }
+
+#####################################################################
+# The readnum routine, its private variables and the event handler. #
+#####################################################################
+
+my $_readnum_number = ''; # The number itself. Filled in by the event handler.
+my $_readnum_timeout = 10; # The value of the timeout. Fileld in by readnum.
+my $_readnum_in_timeout = 1; # 'READY' from timeout or from the '#' key?
+
+# Event handler. Just adds key to the $_readnum_number.
+sub _readnum_event {
+	my $self = shift;
+	my $input = shift; # Unused. Should be 'RECEIVED_DTMF'.
+	my $dtmf = shift;
+
+	if ($dtmf eq '#') { # Stop the reading now.
+		$_readnum_in_timeout = 0;
+		$self->stop;
+		$self->{LOG}->print("_readnum_event(): Got #; stopping\n");
+		return;
+	}
+	$_readnum_number .= $dtmf;
+	$self->stop;
+	$self->expect('READY');
+	# Restart the wait again.
+	$_readnum_in_timeout = 1;
+	$self->wait($_readnum_timeout);
+}
+
+sub readnum {
+	my $self = shift;
+	my $message = shift;
+	my $timeout = shift;
+	my $times = shift;
+	$_readnum_number = '';
+	$_readnum_in_timeout = 1;
+	$_readnum_timeout = $timeout if $timeout != 0;
+	$times = 3 if $times == 0;
+
+	# Install the handler.
+	$self->add_handler('RECEIVED_DTMF', 'readnum', \&_readnum_event);
+	while($_readnum_in_timeout != 0 && $readnum_number eq ''
+		&& $times-- > 0) {
+		$self->play_and_wait($message);
+		last if $_readnum_in_timeout == 0;
+		while ($_readnum_in_timeout != 0) {
+			$self->wait($readnum_timeout);
+			$self->expect('READY');
+		}
+	}
+	return undef if $times < 0;
+	$self->del_handler('RECEIVED_DTMF', 'readnum');
+	$self->stop;
+	$self->expect('READY');
+	$_readnum_number;
+}
+
 1;
 
 __END__
@@ -301,6 +358,8 @@ Modem::Vgetty - interface to vgetty(8)
 	$v->enable_events;
 	$v->disable_events;
 
+	$number = $v->readnum($message, $tmout, $repeat);
+
 	$v->shutdown;
 
 =head1 DESCRIPTION
@@ -337,7 +396,7 @@ machines can be build on top of B<vgetty>.
 B<mgetty> (including the B<vgetty>) is available at
 the following URL:
 
-	ftp://ftp.leo.org/pub/comp/os/unix/networking/mgetty/
+	ftp://alpha.greenie.net/pub/mgetty/
 
 Originally there was a (Bourne) shell interface to B<vgetty> only.
 The B<Modem::Vgetty> module allows user to write the voice shell in Perl.
@@ -352,10 +411,11 @@ can for example dial somewhere and say something.
 	use Modem::Vgetty;
 	my $v = new Modem::Vgetty;
 	$v->add_handler('BUSY_TONE', 'endh', sub { $v->stop; exit(0); });
+	local $SIG{ALRM} = sub { $v->stop; };
 	$v->enable_events;
 	$v->record('/tmp/hello.rmd');
-	sleep 20;
-	$v->stop;
+	alarm(20);
+	$v->waitfor('READY');
 	$v->shutdown;
 
 The above example installs the simple `exit now'-style handler for the
@@ -465,7 +525,7 @@ low-level interface has to be implemented in B<vgetty> first.
 =item beep($freq, $len)
 
 Sends a beep through the chosen device using given frequency (HZ) and length
-(in 1/10s of second, I think).
+(in miliseconds).
 Returns a defined value on success or undef on failure.
 The state of the vgetty changes to "BEEPING" and B<vgetty>
 returns "READY" after a beep is finshed. Example:
@@ -568,6 +628,33 @@ any events anymore.
 
 =back
 
+=head2 The B<readnum> method
+
+=over 4
+
+=item readnum($message, $tmout, $repeat)
+
+The applications often need to read the multi-digit
+number via the DTMF tones.  This routine plays the B<$message> to the
+voice object and then waits for the
+sequence of the DTMF keys finished by the `#' key. If no key is pressed
+for B<$tmout> of seconds, it re-plays the message again. It returns
+failure if no key is pressed after the message is played B<$repeat>-th
+time. It returns a string (a sequence of DTMF tones 0-9,A-D and `*')
+without the final `#'. When some DTMF tones are received and no terminating
+`#' or other tone is received for B<$tmout> seconds, the routine returns
+the string it currently has without waiting for the final '#'.
+DTMF tones are accepted even at the time the B<$message> is played.
+When the DTMF tone is received, the playing of the B<$message> is
+(with some latency, of course) stopped.
+
+B<NOTE:> The interface of this routine can be changed in future releases,
+because I am not (yet) decided whether the current interface is the best one.
+See also the B<EXAMPLES> section where the source code of this routine
+(and its co-routine) is discussed.
+
+=back
+
 =head1 EVENTS
 
 =head2 Introduction
@@ -648,8 +735,9 @@ the standard).
 
 It means that the modem detected voice energy at the
 beginning of the session, but after that there was a
-period of XXX seconds of silence (XXX can be set with
-the AT+VSD command...at least on ZyXELs).
+period of some time of silence (the actual time can be set using
+the B<rec_silence_len> and B<rec_silence_treshold> parameters
+in B<voice.conf>).
 
 =item RING_DETECTED
 
@@ -662,13 +750,16 @@ The modem detected a ringback condition on the line.
 =item RECEIVE_DTMF
 
 The modem detected a dtmf code. The actual code value
-(one of 0-9, *, #) is given to the event handler as the third argument.
+(one of 0-9, *, #, A-D) is given to the event handler as the
+third argument.
 
 =item SILENCE_DETECTED
 
 The modem detected that there was no voice energy at the
-beginning of the session and after that for XXX seconds.
-(XXX can be set with the AT+VSD command...at least on ZyXELs).
+beginning of the session and after some time of silence
+(the actual time can be set using
+the B<rec_silence_len> and B<rec_silence_treshold> parameters
+in B<voice.conf>).
 
 =item SIT_TONE
 
@@ -700,12 +791,15 @@ the sound files (it is a set of filters similar to the B<netpbm> for image
 files). The L<pvftormd/1> filter can be used to create the RMD files
 for all known types of modems.
 
-=head1 EXAMPLE
+=head1 EXAMPLES
+
+=head2 Answering machine
 
 A simple answering machine can look like this:
 
         #!/usr/bin/perl
         use Modem::Vgetty;
+	my $voicemaster = 'root@localhost';
 	my $tmout = 30;
 	my $finish = 0;
         my $v = new Modem::Vgetty;
@@ -721,12 +815,15 @@ A simple answering machine can look like this:
 	if ($finish == 0) {
 		my $num = 0;
 		$num++ while(-r "/path/$num.rmd");
-		$v->record("/cesta/$num.rmd");
+		$v->record("/path/$num.rmd");
 		alarm $tmout;
 		$v->waitfor('READY');
 	}
+	system "echo 'Play with rmdtopvf /path/$num.rmd|pvftoau >/dev/audio'" .
+		 " | mail -s 'New voice message' $voicemaster";
         exit 0;
 
+See the B<examples/answering_machine.pl> in the source distribution.
 It first sets the event handlers for the case of busy tone (the caller
 hangs up) or silence (the caller doesn't speak at all). The handler
 stops B<vgetty> from anything it is currently doing and sets the $finish
@@ -738,6 +835,94 @@ hanged up the phone. Now we find the first filename <number>.rmd
 such that this file does not exist and we start to record the message
 to this file. We record until user hangs up the phone or until
 the timeout occurs.
+
+=head2 Readnum routine
+
+An interesting application of the low-level routines is the
+B<Voice::Modem::readnum> method. The calling sequence of this method
+has been discussed above. The source code for this routine and its
+co-routine will be discussed here, so that you can write your own
+variants of B<readnum> (which in fact does not have too general
+interface). See also the source code of B<Vgetty.pm> for the B<readnum>
+source.
+
+The B<readnum> routine needs to have its own event handler for the
+B<RECEIVED_DTMF> event and the way the handler can communicate with
+this routine. In our solution we use "static" variables:
+
+	my $_readnum_number = '';
+	my $_readnum_timeout = 10;
+	my $_readnum_in_timeout = 1;
+
+The event handler will add the new character to the end of the 
+B<$_readnum_number> variable. The B<$_readnum_timeout> is the number
+of seconds both B<readnum> and the event handler should wait for the
+next keypress, and the B<$_readnum_in_timeout> is a flag used by the
+event handler for notifying the main B<readnum> routine that it forced
+the B<vgetty> to emit the `READY' message because of the final `#'
+has been received.
+
+	sub _readnum_event {
+		my $self = shift;
+		my $input = shift; # Unused. Should be 'RECEIVED_DTMF'.
+		my $dtmf = shift;
+
+		if ($dtmf eq '#') { # Stop the reading now.
+			$_readnum_in_timeout = 0;
+			$self->stop;
+			$self->{LOG}->print("_readnum_event(): Got #; stopping\n");
+			return;
+		}
+		$_readnum_number .= $dtmf;
+		$self->stop;
+		$self->expect('READY');
+		# Restart the wait again.
+		$_readnum_in_timeout = 1;
+		$self->wait($_readnum_timeout);
+	}
+
+The event handler is installed for the `RECEIVED_DTMF' event only, so it
+doesn't need to check for the B<$input> value. The actual DTMF key is in
+the third parameter, B<$dtmf>. Note that the handler will be called
+when B<vgetty> is PLAYING or WAITING and the B<readnum> routine will
+be waiting for the `READY' message. This allows us to immediately
+interrupt waiting by the B<$self->stop> (which emits the `READY' message).
+So when the `#' DTMF tone is received, we send a B<stop> to B<vgetty>.
+If something else is received, we B<stop> the B<vgetty> too but we
+enter a new wait using B<$self->wait>.
+
+	sub readnum {
+		my $self = shift;
+		my $message = shift;
+		my $timeout = shift;
+		my $times = shift;
+		$_readnum_number = '';
+		$_readnum_in_timeout = 1;
+		$_readnum_timeout = $timeout if $timeout != 0;
+		$times = 3 if $times == 0;
+
+		# Install the handler.
+		$self->add_handler('RECEIVED_DTMF', 'readnum', \&_readnum_event);
+		while($_readnum_in_timeout != 0 && $readnum_number eq ''
+			&& $times-- > 0) {
+			$self->play_and_wait($message);
+			last if $_readnum_in_timeout == 0;
+			while ($_readnum_in_timeout != 0) {
+				$self->wait($readnum_timeout);
+				$self->expect('READY');
+			}
+		}
+		return undef if $times < 0;
+		$self->del_handler('RECEIVED_DTMF', 'readnum');
+		$self->stop;
+		$self->expect('READY');
+		$_readnum_number;
+	}
+
+The B<readnum> routine just sets up the event handler, then plays
+the B<$message> and waits for the input (possibly several times).
+The main work is done in the event handler. At the end the handler
+is unregistered and the final value is returned.
 
 =head1 BUGS
 
@@ -760,21 +945,19 @@ current modem type.
 I need to implement the routines similar to B<play_and_wait> for other
 B<vgetty> states as well.
 
-=item The high-level routines
-
-I have the routine which plays the voice file and waits for a sequence
-of DTMF tones finished by a "#"-sign. When there is no input it can
-replay the voice file after some timeout or return undef if there is
-no DTMF input after the voice file is re-played for the third time.
-I am not sure if such a hing-level routines belongs to this module.
-Need to think about it.
-
 =item Debugging information
 
 The module has currently some support for writing a debug logs
 (use the $Modem::Vgetty::testing = 1 and watch the /var/log/voicelog
 file). This needs to be re-done using (I think) Sys::Syslog.
 I need to implement some kind of log-levels, etc.
+
+=item Mgetty/Vgetty 1.1.17
+
+Need to figure out what is new in 1.1.17 (I use 1.1.14 now). I think
+new B<vgetty> can play more than one file in the single `PLAY' command,
+it (I think) have some support for sending voice data from/to the voice
+shell via the pipe, etc.
 
 =back
 
